@@ -246,18 +246,102 @@ function del(id){if(taskTimers[id]){clearInterval(taskTimers[id]);delete taskTim
 function confirmReset(){document.getElementById('confirm-overlay').classList.add('show');}
 function closeConfirm(){document.getElementById('confirm-overlay').classList.remove('show');}
 function doResetAll(){Object.keys(taskTimers).forEach(k=>{clearInterval(taskTimers[k]);delete taskTimers[k];});tasks=[];saveTasks();render();closeConfirm();}
+// ── Task timers (timestamp-based) ──
 const taskTimers={};
-function startTaskTimer(id){if(taskTimers[id])return;const t=tasks.find(t=>t.id===id);if(!t)return;t.timerRunning=true;taskTimers[id]=setInterval(()=>{const t=tasks.find(t=>t.id===id);if(!t){clearInterval(taskTimers[id]);delete taskTimers[id];return;}t.elapsed=(t.elapsed||0)+1;const el=document.getElementById('tt-'+id);if(el)el.textContent=fmtSec(t.elapsed);const row=document.getElementById('trow-'+id);if(row)row.className='task-timer-row running';},1000);saveTasks();render();}
-function stopTaskTimer(id){clearInterval(taskTimers[id]);delete taskTimers[id];const t=tasks.find(t=>t.id===id);if(t)t.timerRunning=false;saveTasks();render();}
-function resetTaskTimer(id){stopTaskTimer(id);const t=tasks.find(t=>t.id===id);if(t)t.elapsed=0;saveTasks();render();}
+function startTaskTimer(id){
+  if(taskTimers[id])return;
+  const t=tasks.find(t=>t.id===id);if(!t)return;
+  t.timerRunning=true;
+  t.timerStart=Date.now();
+  taskTimers[id]=setInterval(()=>{
+    const t=tasks.find(t=>t.id===id);if(!t){clearInterval(taskTimers[id]);delete taskTimers[id];return;}
+    const live=(t.elapsed||0)+Math.floor((Date.now()-t.timerStart)/1000);
+    const el=document.getElementById('tt-'+id);if(el)el.textContent=fmtSec(live);
+    const row=document.getElementById('trow-'+id);if(row)row.className='task-timer-row running';
+  },500);
+  saveTasks();render();
+}
+function stopTaskTimer(id){
+  clearInterval(taskTimers[id]);delete taskTimers[id];
+  const t=tasks.find(t=>t.id===id);if(!t)return;
+  t.elapsed=(t.elapsed||0)+Math.floor((Date.now()-t.timerStart)/1000);
+  t.timerStart=null;t.timerRunning=false;
+  saveTasks();render();
+}
+function resetTaskTimer(id){
+  stopTaskTimer(id);
+  const t=tasks.find(t=>t.id===id);if(t){t.elapsed=0;t.timerStart=null;}
+  saveTasks();render();
+}
 function fmtSec(s){const m=Math.floor(s/60),sec=s%60;return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');}
+
+// ── Pomodoro (timestamp-based) ──
 const MODES={focus:25*60,short:5*60,long:15*60};
-let pomoMode='focus',pomoLeft=MODES.focus,pomoTotal=MODES.focus,pomoRunning=false,pomoInterval=null,pomoSessions=0;
+let pomoMode='focus',pomoTotal=MODES.focus,pomoRunning=false,pomoInterval=null,pomoSessions=0;
+let pomoStart=null,pomoElapsedAtPause=0;
+
+function pomoGetLeft(){
+  if(!pomoRunning)return pomoTotal-pomoElapsedAtPause;
+  const elapsed=pomoElapsedAtPause+Math.floor((Date.now()-pomoStart)/1000);
+  return Math.max(0,pomoTotal-elapsed);
+}
 function updateDots(){const c=document.getElementById('pomo-dots');c.innerHTML='';for(let i=0;i<4;i++){const d=document.createElement('div');d.className='dot'+(i<pomoSessions%4?' filled':'');c.appendChild(d);}}
-function setMode(m){pomoMode=m;pomoLeft=MODES[m];pomoTotal=MODES[m];if(pomoRunning){clearInterval(pomoInterval);pomoRunning=false;}document.querySelectorAll('.mode-pill').forEach(el=>el.classList.remove('active'));document.getElementById('mode-'+m).classList.add('active');updatePomoUI();}
-function pomoToggle(){if(pomoRunning){clearInterval(pomoInterval);pomoRunning=false;}else{pomoInterval=setInterval(()=>{pomoLeft--;if(pomoLeft<=0){clearInterval(pomoInterval);pomoRunning=false;if(pomoMode==='focus')pomoSessions++;updateDots();ringBell();updatePomoUI();return;}updatePomoUI();},1000);pomoRunning=true;}updatePomoUI();}
-function pomoReset(){clearInterval(pomoInterval);pomoRunning=false;pomoLeft=MODES[pomoMode];updatePomoUI();}
-function updatePomoUI(){const m=Math.floor(pomoLeft/60),s=pomoLeft%60;const d=document.getElementById('pomo-display');d.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');d.className='pomo-clock'+(pomoRunning?(pomoMode==='focus'?' running':' break'):'');document.getElementById('pomo-icon').className='ti '+(pomoRunning?'ti-player-pause':'ti-player-play');document.getElementById('pomo-btn-label').textContent=pomoRunning?'Pause':'Start';document.getElementById('pomo-bar').style.width=Math.round(pomoLeft/pomoTotal*100)+'%';document.getElementById('pomo-bar').style.background=pomoMode==='focus'?'#D85A30':'#3B7A2A';updateDots();}
+function setMode(m){
+  pomoMode=m;pomoTotal=MODES[m];pomoElapsedAtPause=0;pomoStart=null;
+  if(pomoRunning){clearInterval(pomoInterval);pomoRunning=false;}
+  document.querySelectorAll('.mode-pill').forEach(el=>el.classList.remove('active'));
+  document.getElementById('mode-'+m).classList.add('active');
+  updatePomoUI();
+}
+function pomoToggle(){
+  if(pomoRunning){
+    pomoElapsedAtPause+=Math.floor((Date.now()-pomoStart)/1000);
+    clearInterval(pomoInterval);pomoRunning=false;
+  } else {
+    pomoStart=Date.now();pomoRunning=true;
+    pomoInterval=setInterval(()=>{
+      const left=pomoGetLeft();
+      updatePomoUI();
+      if(left<=0){
+        clearInterval(pomoInterval);pomoRunning=false;
+        if(pomoMode==='focus')pomoSessions++;
+        pomoElapsedAtPause=pomoTotal;
+        updateDots();ringBell();updatePomoUI();
+      }
+    },500);
+  }
+  updatePomoUI();
+}
+function pomoReset(){
+  clearInterval(pomoInterval);pomoRunning=false;
+  pomoElapsedAtPause=0;pomoStart=null;
+  updatePomoUI();
+}
+function updatePomoUI(){
+  const left=pomoGetLeft();
+  const m=Math.floor(left/60),s=left%60;
+  const d=document.getElementById('pomo-display');
+  d.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+  d.className='pomo-clock'+(pomoRunning?(pomoMode==='focus'?' running':' break'):'');
+  document.getElementById('pomo-icon').className='ti '+(pomoRunning?'ti-player-pause':'ti-player-play');
+  document.getElementById('pomo-btn-label').textContent=pomoRunning?'Pause':'Start';
+  document.getElementById('pomo-bar').style.width=Math.round(left/pomoTotal*100)+'%';
+  document.getElementById('pomo-bar').style.background=pomoMode==='focus'?'#D85A30':'#3B7A2A';
+  updateDots();
+}
+
+// Resume timers after page load
+function resumeTimers(){
+  tasks.forEach(t=>{
+    if(t.timerRunning&&t.timerStart){
+      taskTimers[t.id]=setInterval(()=>{
+        const live=(t.elapsed||0)+Math.floor((Date.now()-t.timerStart)/1000);
+        const el=document.getElementById('tt-'+t.id);if(el)el.textContent=fmtSec(live);
+        const row=document.getElementById('trow-'+t.id);if(row)row.className='task-timer-row running';
+      },500);
+    }
+  });
+}
 function ringBell(){try{const ctx=new(window.AudioContext||window.webkitAudioContext)();const t=ctx.currentTime;[0,.3,.6].forEach(delay=>{const o=ctx.createOscillator(),g=ctx.createGain();o.connect(g);g.connect(ctx.destination);o.frequency.setValueAtTime(880,t+delay);o.frequency.exponentialRampToValueAtTime(440,t+delay+.4);g.gain.setValueAtTime(.4,t+delay);g.gain.exponentialRampToValueAtTime(.001,t+delay+.8);o.start(t+delay);o.stop(t+delay+.8);});}catch(e){}const face=document.getElementById('pomo-face');face.classList.remove('ringing');void face.offsetWidth;face.classList.add('ringing');setTimeout(()=>face.classList.remove('ringing'),2000);const mouth=document.getElementById('pomo-mouth');if(mouth){mouth.setAttribute('d','M33 52 Q40 47 47 52');setTimeout(()=>mouth.setAttribute('d','M33 50 Q40 56 47 50'),2500);}}
 const pOrder={high:0,medium:1,low:2};
 const catIcon={Work:'ti-briefcase',Personal:'ti-plant-2',Health:'ti-heart',Finance:'ti-coin',Other:'ti-tag'};
@@ -269,7 +353,7 @@ function drawGarden(done){const svg=document.getElementById('garden-svg');svg.in
 function render(){const fS=document.getElementById('f-status').value,fP=document.getElementById('f-priority').value,fC=document.getElementById('f-cat').value,sort=document.getElementById('f-sort').value;let list=tasks.filter(t=>{if(fS==='active'&&t.done)return false;if(fS==='done'&&!t.done)return false;if(fP!=='all'&&t.priority!==fP)return false;if(fC!=='all'&&t.cat!==fC)return false;return true;});if(sort==='due')list.sort((a,b)=>(a.date||'9999')>(b.date||'9999')?1:-1);else if(sort==='priority')list.sort((a,b)=>pOrder[a.priority]-pOrder[b.priority]);else list.sort((a,b)=>b.created-a.created);const total=tasks.length,done=tasks.filter(t=>t.done).length,over=tasks.filter(t=>!t.done&&t.date&&t.date<today).length;const pct=total?Math.round(done/total*100):0;document.getElementById('s-total').textContent=total;document.getElementById('s-done').textContent=done;document.getElementById('s-over').textContent=over;document.getElementById('pbar').style.width=pct+'%';document.getElementById('ppct').textContent=pct+'%';drawGarden(tasks.filter(t=>t.done));const el=document.getElementById('task-list');if(!list.length){el.innerHTML='<div class="empty"><i class="ti ti-clipboard-list"></i>No tasks here</div>';return;}el.innerHTML=list.map(t=>{const ov=t.date&&t.date<today&&!t.done;const dueStr=t.date?(ov?'Overdue: '+fmt(t.date):'Due '+fmt(t.date)):'';const elapsed=t.elapsed||0,isRunning=!!taskTimers[t.id];return `<div class="task ${catTask[t.cat]||'cat-other'}${t.done?' done':''}"><div class="check-wrap"><button class="check-btn${t.done?' checked':''}" onclick="toggle(${t.id})" aria-label="${t.done?'Undo':'Complete'}"><i class="ti ti-check"></i></button></div><div><div class="tname">${esc(t.name)}</div><div class="tmeta"><span class="badge p-${t.priority}"><i class="ti ti-flag" style="font-size:10px"></i>${t.priority}</span><span class="badge ${catBadge[t.cat]||'cb-other'}"><i class="ti ${catIcon[t.cat]||'ti-tag'}" style="font-size:10px"></i>${esc(t.cat)}</span>${dueStr?`<span class="due${ov?' overdue':''}"><i class="ti ti-calendar" style="font-size:11px"></i>${dueStr}</span>`:''}</div></div><div class="task-right"><div class="task-timer-row${isRunning?' running':''}" id="trow-${t.id}"><i class="ti ti-clock" style="font-size:12px"></i><span id="tt-${t.id}">${fmtSec(elapsed)}</span></div><div class="timer-btns">${!t.done?(isRunning?`<button class="icon-btn pause-btn" onclick="stopTaskTimer(${t.id})"><i class="ti ti-player-pause" style="font-size:13px"></i></button>`:`<button class="icon-btn start-btn" onclick="startTaskTimer(${t.id})"><i class="ti ti-player-play" style="font-size:13px"></i></button>`):''}${elapsed>0?`<button class="icon-btn" onclick="resetTaskTimer(${t.id})"><i class="ti ti-refresh" style="font-size:13px"></i></button>`:''}<button class="icon-btn del-btn" onclick="del(${t.id})"><i class="ti ti-trash" style="font-size:13px"></i></button></div></div></div>`;}).join('');}
 function fmt(d){const[,m,day]=d.split('-');return['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]+' '+parseInt(day);}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-updatePomoUI();loadTasks();
+updatePomoUI();resumeTimers();loadTasks();
 </script>
 </body>
 </html>
